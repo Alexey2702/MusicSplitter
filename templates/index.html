@@ -1,136 +1,254 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Musician Assistant</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css"/>
 </head>
 <body>
-  <div class="app">
+<div class="app">
 
-    <!-- Sidebar -->
-    <aside class="sidebar">
-      <div class="logo">
-        <span class="logo-icon">♪</span>
-        <span class="logo-text">MusicAI</span>
+  <!-- Top bar -->
+  <header class="topbar">
+    <div class="topbar-logo">
+      <span class="logo-symbol">♪</span>
+      <span class="logo-name">MusicAI</span>
+    </div>
+    <div class="topbar-search">
+      <span class="search-icon">🔍</span>
+      <input class="search-input" id="searchInput" placeholder="Поиск файлов..." autocomplete="off"/>
+      <div class="search-results hidden" id="searchResults"></div>
+    </div>
+    <div class="topbar-right">
+      <span class="topbar-hint" id="topbarHint">Выбери режим</span>
+    </div>
+  </header>
+
+  <!-- Main area -->
+  <main class="main">
+
+    <!-- Home screen -->
+    <div class="home" id="homeScreen">
+      <div class="home-greeting">
+        <h1 class="home-title">Привет, музыкант 👋</h1>
+        <p class="home-sub">Выбери что хочешь сделать</p>
       </div>
-      <nav class="nav">
-        <button class="nav-btn active" data-tab="stems">
-          <span class="nav-icon">⚡</span> Stem Splitter
-        </button>
-        <button class="nav-btn" data-tab="bpm">
-          <span class="nav-icon">♩</span> BPM & Key
-        </button>
-      </nav>
-    </aside>
-
-    <!-- Main content -->
-    <main class="content">
-
-      <!-- STEMS TAB -->
-      <section class="tab active" id="tab-stems">
-        <div class="page-header">
-          <h1>Stem Splitter</h1>
-          <p class="subtitle">Разделение трека на drums · bass · vocals · other</p>
+      <div class="mode-cards">
+        <div class="mode-card-big" data-mode="files">
+          <div class="mcb-glow" style="--c:#7c5cfc"></div>
+          <div class="mcb-icon">📁</div>
+          <div class="mcb-title">Файлы</div>
+          <div class="mcb-desc">Просматривай и воспроизводи треки прямо из файловой системы</div>
+          <div class="mcb-arrow">→</div>
         </div>
-
-        <div class="card drop-zone" id="dropZone">
-          <div class="drop-inner">
-            <div class="drop-icon">🎵</div>
-            <p class="drop-title">Перетащи аудиофайл сюда</p>
-            <p class="drop-sub">или</p>
-            <button class="btn btn-primary" id="btnPickFile">Выбрать файл</button>
-            <p class="drop-formats">MP3 · WAV · FLAC · AIFF · M4A</p>
-          </div>
+        <div class="mode-card-big" data-mode="stems">
+          <div class="mcb-glow" style="--c:#22d3a0"></div>
+          <div class="mcb-icon">⚡</div>
+          <div class="mcb-title">Stem Splitter</div>
+          <div class="mcb-desc">Разделяй треки на вокал, бас, барабаны и инструменталы</div>
+          <div class="mcb-arrow">→</div>
         </div>
+        <div class="mode-card-big" data-mode="bpm">
+          <div class="mcb-glow" style="--c:#fbbf24"></div>
+          <div class="mcb-icon">♩</div>
+          <div class="mcb-title">BPM & Key</div>
+          <div class="mcb-desc">Определяй темп и тональность треков автоматически</div>
+          <div class="mcb-arrow">→</div>
+        </div>
+      </div>
+    </div>
 
-        <div class="card file-info hidden" id="fileInfo">
-          <div class="file-info-row">
-            <span class="file-icon">🎧</span>
-            <div class="file-details">
-              <span class="file-name" id="fileName">—</span>
-              <span class="file-path" id="filePath">—</span>
+    <!-- Files panel -->
+    <div class="panel hidden" id="panel-files" style="display:flex;flex-direction:column">
+      <div class="panel-header">
+        <button class="back-btn" id="backFromFiles">← Назад</button>
+        <h2 class="panel-title">📁 Файлы</h2>
+        <div class="panel-toolbar">
+          <button class="btn btn-secondary btn-sm" id="fsUp">↑ Назад</button>
+          <button class="btn btn-secondary btn-sm" id="fsHome">🏠 Домой</button>
+          <div class="breadcrumb" id="fsBreadcrumb"></div>
+          <button class="btn btn-secondary btn-sm" id="fsMkdir">+ Папка</button>
+        </div>
+      </div>
+      <div class="fs-list" id="fsList"></div>
+    </div>
+
+    <!-- Stem Splitter panel -->
+    <div class="panel hidden" id="panel-stems">
+      <div class="panel-header">
+        <button class="back-btn" id="backFromStems">← Назад</button>
+        <h2 class="panel-title">⚡ Stem Splitter</h2>
+      </div>
+      <div class="stems-layout">
+        <div class="stems-left">
+          <div class="card drop-zone" id="dropZone">
+            <div class="drop-inner">
+              <div class="drop-icon">🎵</div>
+              <p class="drop-title">Перетащи аудиофайл сюда</p>
+              <p class="drop-sub">или</p>
+              <button class="btn btn-primary" id="btnPickFile">Выбрать файл</button>
+              <p class="drop-formats">MP3 · WAV · FLAC · AIFF · M4A</p>
             </div>
-            <button class="btn btn-ghost btn-sm" id="btnClearFile">✕</button>
+          </div>
+          <div class="card file-info hidden" id="fileInfo">
+            <div class="file-info-row">
+              <span class="file-icon">🎧</span>
+              <div class="file-details">
+                <span class="file-name" id="fileName">—</span>
+                <span class="file-path" id="filePath">—</span>
+              </div>
+              <button class="btn btn-ghost btn-sm" id="btnClearFile">✕</button>
+            </div>
+          </div>
+          <div class="card mode-card">
+            <label class="label">Режим разделения</label>
+            <div class="mode-toggle">
+              <button class="mode-btn active" data-mode="2stem">
+                <span class="mode-icon">✂️</span>
+                <span class="mode-title">2 дорожки</span>
+                <span class="mode-sub">Vocals · Instrumental</span>
+              </button>
+              <button class="mode-btn" data-mode="4stem">
+                <span class="mode-icon">🎛️</span>
+                <span class="mode-title">4 дорожки</span>
+                <span class="mode-sub">Drums · Bass · Other · Vocals</span>
+              </button>
+            </div>
+          </div>
+          <div class="card output-card hidden" id="outputCard">
+            <label class="label">Папка для результатов</label>
+            <div class="input-row">
+              <input class="input" id="outputDir" placeholder="/Users/you/Desktop/stems" readonly/>
+              <button class="btn btn-secondary" id="btnPickFolder">Обзор</button>
+            </div>
+          </div>
+          <button class="btn btn-primary btn-large" id="btnSeparate" disabled>
+            <span id="btnSeparateText">Разделить трек</span>
+          </button>
+          <div class="card progress-card hidden" id="progressCard">
+            <div class="progress-header">
+              <span class="progress-stage" id="progressStage">Подготовка...</span>
+              <span class="progress-pct" id="progressPct">0%</span>
+            </div>
+            <div class="progress-bar-wrap">
+              <div class="progress-bar" id="progressBar"></div>
+            </div>
+            <p class="progress-msg" id="progressMsg"></p>
           </div>
         </div>
-
-        <!-- Режим разделения -->
-        <div class="card mode-card">
-          <label class="label">Режим разделения</label>
-          <div class="mode-toggle">
-            <button class="mode-btn active" data-mode="2stem">
-              <span class="mode-icon">✂️</span>
-              <span class="mode-title">2 дорожки</span>
-              <span class="mode-sub">Vocals · Instrumental</span>
-            </button>
-            <button class="mode-btn" data-mode="4stem">
-              <span class="mode-icon">🎛️</span>
-              <span class="mode-title">4 дорожки</span>
-              <span class="mode-sub">Drums · Bass · Other · Vocals</span>
-            </button>
+        <div class="stems-right">
+          <div class="stems-result hidden" id="stemsResult">
+            <h2 class="section-title">Результат</h2>
+            <div class="stems-grid" id="stemsGrid"></div>
           </div>
-        </div>
-
-        <!-- Папка — только для 4stem -->
-        <div class="card output-card" id="outputCard">
-          <label class="label">Папка для результатов</label>
-          <div class="input-row">
-            <input class="input" id="outputDir" placeholder="/Users/you/Desktop/stems" readonly />
-            <button class="btn btn-secondary" id="btnPickFolder">Обзор</button>
+          <div class="stems-empty" id="stemsEmpty">
+            <div class="stems-empty-icon">🎛️</div>
+            <p>Результат появится здесь</p>
           </div>
-        </div>
-
-        <button class="btn btn-primary btn-large" id="btnSeparate" disabled>
-          <span id="btnSeparateText">Разделить трек</span>
-        </button>
-
-        <!-- Progress -->
-        <div class="card progress-card hidden" id="progressCard">
-          <div class="progress-header">
-            <span class="progress-stage" id="progressStage">Подготовка...</span>
-            <span class="progress-pct" id="progressPct">0%</span>
-          </div>
-          <div class="progress-bar-wrap">
-            <div class="progress-bar" id="progressBar"></div>
-          </div>
-          <p class="progress-msg" id="progressMsg"></p>
-        </div>
-
-        <!-- Stems result -->
-        <div class="stems-result hidden" id="stemsResult">
-          <h2 class="section-title">Результат</h2>
-          <div class="stems-grid" id="stemsGrid"></div>
-        </div>
-
-      </section>
-
-      <!-- Save modal (2stem) -->
-      <div class="modal-overlay hidden" id="saveModal">
-        <div class="modal">
-          <div class="modal-icon">✅</div>
-          <h2 class="modal-title">Разделение завершено</h2>
-          <p class="modal-sub">Выбери папку для сохранения файлов</p>
-          <div class="input-row" style="margin: 16px 0">
-            <input class="input" id="saveDir" placeholder="Папка для сохранения" readonly />
-            <button class="btn btn-secondary" id="btnPickSaveFolder">Обзор</button>
-          </div>
-          <button class="btn btn-primary" id="btnSaveNow" style="width:100%" disabled>Сохранить</button>
         </div>
       </div>
+    </div>
 
-      <!-- BPM TAB (placeholder) -->
-      <section class="tab" id="tab-bpm">
-        <div class="page-header">
-          <h1>BPM & Key</h1>
-          <p class="subtitle">Скоро...</p>
+    <!-- BPM panel -->
+    <div class="panel hidden" id="panel-bpm">
+      <div class="panel-header">
+        <button class="back-btn" id="backFromBpm">← Назад</button>
+        <h2 class="panel-title">♩ BPM & Key</h2>
+      </div>
+      <div class="coming-soon">
+        <div class="cs-icon">🚧</div>
+        <p class="cs-title">Скоро</p>
+        <p class="cs-sub">Функция в разработке</p>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Player -->
+  <div class="player-bar hidden" id="playerBar">
+    <div class="player-stem-info">
+      <span class="player-icon" id="playerIcon">🎵</span>
+      <div>
+        <div class="player-track-name" id="playerTrackName">—</div>
+        <div class="player-time">
+          <span id="playerCurrent">0:00</span> / <span id="playerDuration">0:00</span>
         </div>
-      </section>
-
-    </main>
+      </div>
+    </div>
+    <div class="player-center">
+      <div class="player-controls">
+        <button class="ctrl-btn" id="btnStop" title="Стоп">⏹</button>
+        <button class="ctrl-btn ctrl-play" id="btnPlay" title="Play">▶</button>
+      </div>
+      <div class="player-waveform-wrap">
+        <canvas class="player-waveform" id="waveformCanvas"></canvas>
+        <div class="player-progress-line" id="progressLine"></div>
+      </div>
+    </div>
+    <div class="player-right">
+      <input type="range" class="volume-slider" id="volumeSlider" min="0" max="1" step="0.01" value="1"/>
+      <span class="volume-icon">🔊</span>
+    </div>
   </div>
 
-  <script src="/static/app.js"></script>
+</div>
+
+<!-- Save modal -->
+<div class="modal-overlay hidden" id="saveModal">
+  <div class="modal">
+    <div class="modal-icon">✅</div>
+    <h2 class="modal-title">Разделение завершено</h2>
+    <p class="modal-sub">Выбери папку для сохранения файлов</p>
+    <div class="input-row" style="margin:16px 0">
+      <input class="input" id="saveDir" placeholder="Папка для сохранения" readonly/>
+      <button class="btn btn-secondary" id="btnPickSaveFolder">Обзор</button>
+    </div>
+    <button class="btn btn-primary" id="btnSaveNow" style="width:100%" disabled>Сохранить</button>
+  </div>
+</div>
+
+<!-- Custom File Picker Modal -->
+<div class="modal-overlay hidden" id="filePickerOverlay">
+  <div class="file-picker">
+    <div class="picker-sidebar">
+      <div class="picker-sidebar-title">Быстрый доступ</div>
+      <button class="picker-loc-btn active" data-picker-loc="home">🏠 Домой</button>
+      <button class="picker-loc-btn" data-picker-loc="desktop">🖥 Рабочий стол</button>
+      <button class="picker-loc-btn" data-picker-loc="downloads">⬇️ Загрузки</button>
+      <button class="picker-loc-btn" data-picker-loc="documents">📄 Документы</button>
+      <button class="picker-loc-btn" data-picker-loc="music">🎵 Музыка</button>
+    </div>
+    <div class="picker-main">
+      <div class="picker-header">
+        <button class="picker-up-btn" id="filePickerUp" title="Назад">←</button>
+        <div class="picker-breadcrumb" id="filePickerBreadcrumb"></div>
+        <input class="picker-search" id="filePickerSearch" placeholder="Поиск..." autocomplete="off"/>
+        <button class="picker-close-btn" id="filePickerClose">✕</button>
+      </div>
+      <div class="picker-title-row">
+        <span class="picker-folder-title" id="filePickerTitle">Файлы</span>
+      </div>
+      <div class="picker-list" id="filePickerList"></div>
+      <div class="picker-footer">
+        <button class="btn btn-secondary" id="filePickerCancel">Отмена</button>
+        <button class="btn btn-primary" id="filePickerOpen" disabled>Открыть</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Context menu -->
+<div class="ctx-menu hidden" id="ctxMenu">
+  <button class="ctx-item" id="ctxPlay">▶ Воспроизвести</button>
+  <button class="ctx-item" id="ctxSend">⚡ Отправить на разделение</button>
+  <div class="ctx-divider"></div>
+  <button class="ctx-item" id="ctxRename">✏️ Переименовать</button>
+  <button class="ctx-item" id="ctxCopyPath">📋 Скопировать путь</button>
+  <div class="ctx-divider"></div>
+  <button class="ctx-item ctx-danger" id="ctxDelete">🗑 Удалить</button>
+</div>
+
+<script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

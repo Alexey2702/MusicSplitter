@@ -135,6 +135,124 @@ def open_stem():
             subprocess.Popen(['xdg-open', os.path.dirname(path)])
     return jsonify({"ok": True})
 
+AUDIO_EXTS = {'.mp3', '.wav', '.flac', '.aiff', '.aif', '.m4a', '.ogg', '.opus'}
+
+@flask_app.route('/api/fs/list')
+def fs_list():
+    path = request.args.get('path', os.path.expanduser('~'))
+    try:
+        entries = []
+        with os.scandir(path) as it:
+            for e in sorted(it, key=lambda x: (not x.is_dir(), x.name.lower())):
+                if e.name.startswith('.'):
+                    continue
+                if not e.is_dir():
+                    ext = os.path.splitext(e.name)[1].lower()
+                    if ext not in AUDIO_EXTS:
+                        continue
+                try:
+                    stat = e.stat()
+                    entries.append({
+                        'name': e.name,
+                        'path': e.path,
+                        'is_dir': e.is_dir(),
+                        'size': stat.st_size if not e.is_dir() else None,
+                        'modified': stat.st_mtime,
+                    })
+                except PermissionError:
+                    pass
+        # breadcrumb
+        parts = []
+        p = path
+        while True:
+            head, tail = os.path.split(p)
+            parts.insert(0, {'name': tail or p, 'path': p})
+            if head == p:
+                break
+            p = head
+        return jsonify({'entries': entries, 'path': path, 'breadcrumb': parts})
+    except PermissionError:
+        return jsonify({'error': 'Нет доступа'}), 403
+
+@flask_app.route('/api/fs/search')
+def fs_search():
+    query = request.args.get('q', '').lower()
+    if not query or len(query) < 2:
+        return jsonify({'results': []})
+    start = os.path.expanduser('~')
+    results = []
+    try:
+        for root, dirs, files in os.walk(start):
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
+            if len(results) >= 30:
+                break
+            for f in files:
+                ext = os.path.splitext(f)[1].lower()
+                if ext in AUDIO_EXTS and query in f.lower():
+                    results.append({'name': f, 'path': os.path.join(root, f)})
+                    if len(results) >= 30:
+                        break
+    except Exception:
+        pass
+    return jsonify({'results': results})
+
+@flask_app.route('/api/fs/rename', methods=['POST'])
+def fs_rename():
+    data = request.json
+    src, dst_name = data.get('path'), data.get('new_name')
+    dst = os.path.join(os.path.dirname(src), dst_name)
+    try:
+        os.rename(src, dst)
+        return jsonify({'ok': True, 'new_path': dst})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@flask_app.route('/api/fs/delete', methods=['POST'])
+def fs_delete():
+    import shutil
+    path = request.json.get('path')
+    try:
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+        else:
+            os.remove(path)
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@flask_app.route('/api/fs/mkdir', methods=['POST'])
+def fs_mkdir():
+    path = request.json.get('path')
+    try:
+        os.makedirs(path, exist_ok=True)
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@flask_app.route('/api/stream')
+def stream_audio():
+    from flask import send_file
+    path = request.args.get('path')
+    if not path or not os.path.exists(path):
+        return jsonify({"error": "Файл не найден"}), 404
+    return send_file(path, mimetype='audio/wav', conditional=True)
+
+@flask_app.route('/api/fs/quickloc')
+def fs_quickloc():
+    loc = request.args.get('loc', 'home')
+    home = os.path.expanduser('~')
+    paths = {
+        'home':      home,
+        'desktop':   os.path.join(home, 'Desktop'),
+        'downloads': os.path.join(home, 'Downloads'),
+        'documents': os.path.join(home, 'Documents'),
+        'music':     os.path.join(home, 'Music'),
+    }
+    path = paths.get(loc, home)
+    if not os.path.exists(path):
+        path = home
+    return jsonify({'path': path})
+
 @flask_app.route('/api/stems_list')
 def stems_list():
     output_dir = request.args.get('dir')
