@@ -13,7 +13,7 @@ Splits any audio file into 4 components: **vocals, drums, bass, other instrument
 ## Installation
 
 ```bash
-git clone https://github.com/your-username/musicsplitter.git
+git clone https://github.com/Alexey2702/MusicSplitter.git
 cd musicsplitter
 
 python -m venv .venv
