@@ -5,3 +5,4 @@ import './stems.js';
 import './fileManager.js';
 import './search.js';
 import './filePicker.js';
+import './trackView.js';

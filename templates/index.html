@@ -150,6 +150,124 @@
       </div>
     </div>
 
+    <!-- Track View panel -->
+    <div class="panel hidden" id="panel-track">
+      <div class="panel-header">
+        <button class="back-btn" id="backFromTrack">← Назад</button>
+        <h2 class="panel-title" id="tvTitle">Трек</h2>
+        <div style="margin-left:auto;display:flex;gap:8px">
+          <button class="btn btn-secondary btn-sm" id="tvActSend">⚡ Stem Splitter</button>
+          <button class="btn btn-secondary btn-sm" id="tvActFinder">📂 В Finder</button>
+          <button class="btn btn-secondary btn-sm" id="tvActCopy">📋 Путь</button>
+        </div>
+      </div>
+      <p class="tv-meta" id="tvMeta"></p>
+
+      <!-- Big waveform -->
+      <div class="tv-wave-wrap">
+        <canvas class="tv-wave-canvas" id="tvWaveCanvas"></canvas>
+        <div class="tv-wave-progress" id="tvProgress"></div>
+        <div class="tv-time-row">
+          <span id="tvCurrent">0:00</span>
+          <span id="tvDuration">0:00</span>
+        </div>
+      </div>
+
+      <!-- Controls -->
+      <div class="tv-controls">
+        <button class="tv-ctrl-btn" id="tvBtnBack10" title="-10с">«10</button>
+        <button class="tv-ctrl-btn tv-ctrl-stop" id="tvBtnStop" title="Стоп">⏹</button>
+        <button class="tv-ctrl-btn tv-ctrl-play" id="tvBtnPlay" title="Play">▶</button>
+        <button class="tv-ctrl-btn" id="tvBtnFwd10" title="+10с">10»</button>
+        <div class="tv-volume-wrap">
+          <span class="tv-vol-icon">🔊</span>
+          <input type="range" class="volume-slider" id="tvVolume" min="0" max="1" step="0.01" value="1"/>
+          <span class="tv-vol-val" id="tvVolumeVal">100%</span>
+        </div>
+      </div>
+
+      <!-- Bottom: EQ + Info + BPM/Key + Actions -->
+      <div class="tv-bottom">
+        <div class="tv-eq-block">
+          <div class="tv-block-title">Частотный спектр</div>
+          <div class="tv-eq-wrap">
+            <canvas class="tv-eq-canvas" id="tvEqCanvas"></canvas>
+          </div>
+        </div>
+        <div class="tv-info-block">
+          <div class="tv-block-title">Информация</div>
+          <div class="tv-info-grid" id="tvInfoGrid"></div>
+        </div>
+        <div class="tv-right-col">
+          <div class="tv-analysis-block" id="tvAnalysisBlock">
+            <div class="tv-block-title">Анализ</div>
+            <div class="tv-analysis-loading" id="tvAnalysisLoading">
+              <div class="tv-spinner"></div>
+              <span>Анализируем...</span>
+            </div>
+            <div class="tv-analysis-results hidden" id="tvAnalysisResults">
+              <div class="tv-stat-col">
+                <div class="tv-stat-row-item">
+                  <div class="tv-stat-row-label">BPM</div>
+                  <div class="tv-stat-row-value" id="tvBpmVal">—</div>
+                </div>
+                <div class="tv-stat-divider"></div>
+                <div class="tv-stat-row-item">
+                  <div class="tv-stat-row-label">Тональность</div>
+                  <div class="tv-stat-row-value tv-stat-key" id="tvKeyVal">—</div>
+                </div>
+              </div>
+              <div class="tv-energy-row" style="margin-top:10px">
+                <div class="tv-energy-label">
+                  <span>Уверенность</span>
+                  <span id="tvKeyStrengthPct">—</span>
+                </div>
+                <div class="tv-energy-bar-wrap">
+                  <div class="tv-energy-bar" id="tvKeyStrengthBar" style="background:linear-gradient(90deg,var(--accent),var(--accent2))"></div>
+                </div>
+              </div>
+              <div class="tv-energy-row" style="margin-top:6px">
+                <div class="tv-energy-label">
+                  <span>Энергия</span>
+                  <span id="tvEnergyPct">—</span>
+                </div>
+                <div class="tv-energy-bar-wrap">
+                  <div class="tv-energy-bar" id="tvEnergyBar"></div>
+                </div>
+              </div>
+            </div>
+            <div class="tv-analysis-error hidden" id="tvAnalysisError">⚠️ Ошибка анализа</div>
+          </div>
+          <div class="tv-actions-block">
+            <div class="tv-block-title">Действия</div>
+            <div class="tv-actions-list">
+              <button class="tv-action-btn" id="tvActStem">
+                <span class="tv-act-icon">⚡</span>
+                <div>
+                  <div class="tv-act-title">Stem Splitter</div>
+                  <div class="tv-act-sub">Разделить на дорожки</div>
+                </div>
+              </button>
+              <button class="tv-action-btn" id="tvActFinderB">
+                <span class="tv-act-icon">📂</span>
+                <div>
+                  <div class="tv-act-title">Открыть в Finder</div>
+                  <div class="tv-act-sub">Показать файл</div>
+                </div>
+              </button>
+              <button class="tv-action-btn" id="tvActCopyB">
+                <span class="tv-act-icon">📋</span>
+                <div>
+                  <div class="tv-act-title">Скопировать путь</div>
+                  <div class="tv-act-sub">В буфер обмена</div>
+                </div>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- BPM panel -->
     <div class="panel hidden" id="panel-bpm">
       <div class="panel-header">
@@ -174,6 +292,11 @@
         <div class="player-time">
           <span id="playerCurrent">0:00</span> / <span id="playerDuration">0:00</span>
         </div>
+      </div>
+      <button class="player-open-btn" id="btnOpenTrackView" title="Открыть трек">↗</button>
+      <div class="player-analysis" id="playerAnalysis">
+        <span class="player-analysis-bpm" id="playerBarBpm"></span>
+        <span class="player-analysis-key" id="playerBarKey"></span>
       </div>
     </div>
     <div class="player-center">
@@ -240,6 +363,7 @@
 
 <!-- Context menu -->
 <div class="ctx-menu hidden" id="ctxMenu">
+  <button class="ctx-item" id="ctxOpen">↗ Открыть трек</button>
   <button class="ctx-item" id="ctxPlay">▶ Воспроизвести</button>
   <button class="ctx-item" id="ctxSend">⚡ Отправить на разделение</button>
   <div class="ctx-divider"></div>

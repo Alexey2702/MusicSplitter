@@ -65,6 +65,7 @@ export async function fsNavigate(path) {
 
     const actionsHtml = entry.is_dir ? '' : `
       ${isAudio ? `<button class="fs-action-btn play" data-action="play" data-path="${encodeURIComponent(entry.path)}" data-name="${encodeURIComponent(entry.name)}">▶</button>` : ''}
+      ${isAudio ? `<button class="fs-action-btn" data-action="open" data-path="${encodeURIComponent(entry.path)}" data-name="${encodeURIComponent(entry.name)}" data-size="${entry.size || 0}" title="Открыть трек">↗</button>` : ''}
       ${isAudio ? `<button class="fs-action-btn" data-action="send" data-path="${encodeURIComponent(entry.path)}">⚡</button>` : ''}
     `;
 
@@ -75,7 +76,10 @@ export async function fsNavigate(path) {
       <div class="fs-actions">${actionsHtml}</div>
     `;
 
-    row.addEventListener('dblclick', () => { if (entry.is_dir) fsNavigate(entry.path); });
+    row.addEventListener('dblclick', () => {
+      if (entry.is_dir) fsNavigate(entry.path);
+      else if (/\.(mp3|wav|flac|aiff|m4a|ogg)$/i.test(entry.name)) openTrackView(entry);
+    });
     row.addEventListener('click', e => {
       const btn = e.target.closest('[data-action]');
       if (!btn) return;
@@ -83,7 +87,9 @@ export async function fsNavigate(path) {
       const action = btn.dataset.action;
       const path   = decodeURIComponent(btn.dataset.path);
       const name   = btn.dataset.name ? decodeURIComponent(btn.dataset.name) : '';
+      const size   = parseInt(btn.dataset.size || '0');
       if (action === 'play') fsPlayFile(path, name);
+      if (action === 'open') openTrackView({ path, name, size });
       if (action === 'send') fsSendToSplitter(path);
     });
     row.addEventListener('contextmenu', e => { e.preventDefault(); showCtxMenu(e.clientX, e.clientY, entry); });
@@ -115,10 +121,17 @@ function fsSendToSplitter(path) {
   setFile(path);
 }
 
+async function openTrackView(entry) {
+  const { openTrackView: _open } = await import('./trackView.js');
+  _open({ path: entry.path, name: entry.name, size: entry.size || 0 });
+  showPanel('track');
+}
+
 // ── Context menu ──
 function showCtxMenu(x, y, entry) {
   ctxTarget = entry;
   const isAudio = /\.(mp3|wav|flac|aiff|m4a|ogg)$/i.test(entry.name);
+  document.getElementById('ctxOpen').style.display   = isAudio && !entry.is_dir ? '' : 'none';
   document.getElementById('ctxPlay').style.display   = isAudio && !entry.is_dir ? '' : 'none';
   document.getElementById('ctxSend').style.display   = isAudio && !entry.is_dir ? '' : 'none';
   ctxMenu.style.left = x + 'px';
@@ -128,8 +141,8 @@ function showCtxMenu(x, y, entry) {
 
 document.addEventListener('click', () => ctxMenu.classList.add('hidden'));
 
-document.getElementById('ctxPlay').addEventListener('click', () => {
-  if (ctxTarget) fsPlayFile(ctxTarget.path, ctxTarget.name);
+document.getElementById('ctxOpen').addEventListener('click', () => {
+  if (ctxTarget) openTrackView(ctxTarget);
 });
 document.getElementById('ctxSend').addEventListener('click', () => {
   if (ctxTarget) fsSendToSplitter(ctxTarget.path);

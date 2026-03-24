@@ -1,4 +1,4 @@
-// ── Player ──
+// ── Player (single audio engine) ──
 const playerBar       = document.getElementById('playerBar');
 const playerIcon      = document.getElementById('playerIcon');
 const playerTrackName = document.getElementById('playerTrackName');
@@ -10,25 +10,54 @@ const waveformCanvas  = document.getElementById('waveformCanvas');
 const progressLine    = document.getElementById('progressLine');
 const volumeSlider    = document.getElementById('volumeSlider');
 
-let audioCtx        = null;
-let audioBuffer     = null;
-let sourceNode      = null;
-let gainNode        = null;
-let startedAt       = 0;
-let seekOffset      = 0;
-let isPlaying       = false;
-let rafId           = null;
+let audioCtx         = null;
+let analyserNode     = null;
+let audioBuffer      = null;
+let sourceNode       = null;
+let gainNode         = null;
+let startedAt        = 0;
+let seekOffset       = 0;
+let isPlaying        = false;
+let rafId            = null;
 let _currentStemPath = null;
 let currentStemCard  = null;
 let isLoadingAudio   = false;
+
+// External tick/stop/load callbacks (used by trackView)
+const _tickCbs  = new Set();
+const _stopCbs  = new Set();
+const _loadCbs  = new Set();
 
 export const stemIcons = { vocals: '🎤', drums: '🥁', bass: '🎸', other: '🎹', instrumental: '🎼' };
 
 export function getCurrentStemPath() { return _currentStemPath; }
 export function getIsPlaying()       { return isPlaying; }
+export function getAudioBuffer()     { return audioBuffer; }
+export function getSeekOffset()      { return seekOffset; }
 
-function getAudioCtx() {
-  if (!audioCtx) audioCtx = new AudioContext();
+export function getElapsed() {
+  if (!audioCtx || !audioBuffer) return 0;
+  if (!isPlaying) return seekOffset;
+  return Math.min(audioCtx.currentTime - startedAt, audioBuffer.duration);
+}
+
+export function getAnalyser() { return analyserNode; }
+
+export function onTick(cb)   { _tickCbs.add(cb); }
+export function offTick(cb)  { _tickCbs.delete(cb); }
+export function onStop(cb)   { _stopCbs.add(cb); }
+export function offStop(cb)  { _stopCbs.delete(cb); }
+export function onLoad(cb)   { _loadCbs.add(cb); }
+export function offLoad(cb)  { _loadCbs.delete(cb); }
+
+function _getCtx() {
+  if (!audioCtx) {
+    audioCtx   = new AudioContext();
+    analyserNode = audioCtx.createAnalyser();
+    analyserNode.fftSize = 256;
+    // analyser → destination (gain will connect to analyser)
+    analyserNode.connect(audioCtx.destination);
+  }
   return audioCtx;
 }
 
@@ -48,7 +77,7 @@ export async function loadAndPlay(path, name, card) {
   playerDuration.textContent  = '...';
   _setPlayBtn(true);
 
-  const ctx = getAudioCtx();
+  const ctx = _getCtx();
   if (ctx.state === 'suspended') await ctx.resume();
 
   try {
@@ -58,24 +87,41 @@ export async function loadAndPlay(path, name, card) {
     audioBuffer = await ctx.decodeAudioData(raw);
     isLoadingAudio = false;
     playerDuration.textContent = formatTime(audioBuffer.duration);
-    drawWaveform(audioBuffer);
+    _drawWaveform(audioBuffer);
     _startFrom(0);
+    _loadCbs.forEach(cb => cb(audioBuffer, path));
   } catch (e) {
     isLoadingAudio = false;
     console.error('Ошибка загрузки:', e);
   }
 }
 
+export function seekTo(offset) {
+  if (!audioBuffer) return;
+  const wasPlaying = isPlaying;
+  _killSource();
+  seekOffset = Math.max(0, Math.min(offset, audioBuffer.duration - 0.01));
+  if (wasPlaying) {
+    _startFrom(seekOffset);
+  } else {
+    // update bar UI even when paused
+    const pct = seekOffset / audioBuffer.duration * 100;
+    progressLine.style.width  = pct + '%';
+    playerCurrent.textContent = formatTime(seekOffset);
+    _tickCbs.forEach(cb => cb(seekOffset, audioBuffer.duration));
+  }
+}
+
 function _startFrom(offset) {
   if (!audioBuffer) return;
   _killSource();
-  const ctx = getAudioCtx();
+  const ctx  = _getCtx();
   sourceNode = ctx.createBufferSource();
   sourceNode.buffer = audioBuffer;
   gainNode = ctx.createGain();
   gainNode.gain.value = parseFloat(volumeSlider.value);
   sourceNode.connect(gainNode);
-  gainNode.connect(ctx.destination);
+  gainNode.connect(analyserNode); // → analyser → destination
   sourceNode.start(0, offset);
   startedAt  = ctx.currentTime - offset;
   seekOffset = offset;
@@ -87,9 +133,10 @@ function _startFrom(offset) {
       isPlaying = false;
       seekOffset = 0;
       _setPlayBtn(false);
-      progressLine.style.width = '0%';
+      progressLine.style.width  = '0%';
       playerCurrent.textContent = '0:00';
       cancelAnimationFrame(rafId);
+      _stopCbs.forEach(cb => cb());
     }
   };
   cancelAnimationFrame(rafId);
@@ -99,8 +146,9 @@ function _startFrom(offset) {
 function _tick() {
   if (!isPlaying || !audioBuffer) return;
   const elapsed = Math.min(audioCtx.currentTime - startedAt, audioBuffer.duration);
-  progressLine.style.width = (elapsed / audioBuffer.duration * 100) + '%';
+  progressLine.style.width  = (elapsed / audioBuffer.duration * 100) + '%';
   playerCurrent.textContent = formatTime(elapsed);
+  _tickCbs.forEach(cb => cb(elapsed, audioBuffer.duration));
   rafId = requestAnimationFrame(_tick);
 }
 
@@ -131,7 +179,7 @@ export function pauseAudio() {
 
 export async function resumeAudio() {
   if (isPlaying || !audioBuffer) return;
-  const ctx = getAudioCtx();
+  const ctx = _getCtx();
   if (ctx.state === 'suspended') await ctx.resume();
   _startFrom(seekOffset);
   _setPlayBtn(true);
@@ -141,12 +189,13 @@ export function stopAudio() {
   _killSource();
   seekOffset = 0;
   isLoadingAudio = false;
-  progressLine.style.width = '0%';
+  progressLine.style.width  = '0%';
   playerCurrent.textContent = '0:00';
   _setPlayBtn(false);
+  _stopCbs.forEach(cb => cb());
 }
 
-function drawWaveform(buffer) {
+function _drawWaveform(buffer) {
   const canvas = waveformCanvas;
   const ctx    = canvas.getContext('2d');
   const W      = canvas.parentElement.offsetWidth || 400;
@@ -177,15 +226,12 @@ export function formatTime(sec) {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-// ── Events ──
+// ── Bottom bar events ──
 waveformCanvas.addEventListener('click', e => {
   if (!audioBuffer) return;
   const rect   = waveformCanvas.getBoundingClientRect();
   const pct    = Math.max(0, Math.min((e.clientX - rect.left) / rect.width, 1));
-  const offset = pct * audioBuffer.duration;
-  progressLine.style.width  = (pct * 100) + '%';
-  playerCurrent.textContent = formatTime(offset);
-  _startFrom(offset);
+  seekTo(pct * audioBuffer.duration);
   _setPlayBtn(true);
 });
 
@@ -200,6 +246,33 @@ btnStop.addEventListener('click', () => {
   document.querySelectorAll('.stem-play-btn').forEach(b => {
     b.textContent = '▶'; b.classList.remove('playing');
   });
+});
+
+document.getElementById('btnOpenTrackView').addEventListener('click', () => {
+  if (!_currentStemPath) return;
+  import('./trackView.js').then(m => {
+    m.openTrackView({
+      path: _currentStemPath,
+      name: playerTrackName.textContent,
+      size: 0,
+    });
+    import('./nav.js').then(n => n.showPanel('track'));
+  });
+});
+
+// ── Auto-analyze on any new track load → push BPM/key to bottom bar ──
+let _lastAnalyzedPath = null;
+onLoad((buffer, path) => {
+  if (path === _lastAnalyzedPath) return;
+  _lastAnalyzedPath = path;
+  import('./trackView.js').then(m => m.pushAnalysisToBar(null)); // clear while loading
+  fetch('/api/analyze?path=' + encodeURIComponent(path))
+    .then(r => r.json())
+    .then(data => {
+      if (path !== _currentStemPath) return; // stale
+      import('./trackView.js').then(m => m.pushAnalysisToBar(data));
+    })
+    .catch(() => {});
 });
 
 volumeSlider.addEventListener('input', () => {

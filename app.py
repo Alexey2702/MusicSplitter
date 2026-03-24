@@ -9,6 +9,53 @@ import soundfile as sf
 
 flask_app = Flask(__name__, template_folder='templates', static_folder='static')
 
+# --- Analysis cache (JSON file-based DB) ---
+import threading as _threading
+
+_CACHE_PATH = os.path.join(os.path.dirname(__file__), '.analysis_cache.json')
+_cache_lock = _threading.Lock()
+_KEY_STRENGTH_THRESHOLD = 0.75  # re-analyze if confidence below this
+
+def _load_cache():
+    try:
+        with open(_CACHE_PATH, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_cache(cache):
+    with open(_CACHE_PATH, 'w', encoding='utf-8') as f:
+        json.dump(cache, f, ensure_ascii=False, indent=2)
+
+def _cache_get(path):
+    """Return cached result if valid (file unchanged, key_strength sufficient)."""
+    with _cache_lock:
+        cache = _load_cache()
+        entry = cache.get(path)
+        if not entry:
+            return None
+        # Invalidate if file was modified
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            return None
+        if abs(entry.get('_mtime', 0) - mtime) > 1:
+            return None
+        # Re-analyze if key confidence was low
+        if entry.get('key_strength', 0) < _KEY_STRENGTH_THRESHOLD:
+            return None
+        return entry
+
+def _cache_set(path, data):
+    with _cache_lock:
+        cache = _load_cache()
+        try:
+            data['_mtime'] = os.path.getmtime(path)
+        except OSError:
+            pass
+        cache[path] = data
+        _save_cache(cache)
+
 # --- Хранилище прогресса ---
 separation_state = {
     "running": False,
@@ -252,6 +299,172 @@ def fs_quickloc():
     if not os.path.exists(path):
         path = home
     return jsonify({'path': path})
+
+CAMELOT_MAP = {
+    # Minor (A)
+    'abm': '1A', 'g#m': '1A',
+    'ebm': '2A', 'd#m': '2A',
+    'bbm': '3A', 'a#m': '3A',
+    'fm':  '4A',
+    'cm':  '5A',
+    'gm':  '6A',
+    'dm':  '7A',
+    'am':  '8A',
+    'em':  '9A',
+    'bm':  '10A',
+    'f#m': '11A', 'gbm': '11A',
+    'dbm': '12A', 'c#m': '12A',
+    # Major (B)
+    'b':   '1B',
+    'f#':  '2B', 'gb':  '2B',
+    'db':  '3B', 'c#':  '3B',
+    'ab':  '4B', 'g#':  '4B',
+    'eb':  '5B', 'd#':  '5B',
+    'bb':  '6B', 'a#':  '6B',
+    'f':   '7B',
+    'c':   '8B',
+    'g':   '9B',
+    'd':   '10B',
+    'a':   '11B',
+    'e':   '12B',
+}
+
+def _to_camelot(key_note, scale):
+    raw = key_note.strip().lower()
+    suffix = 'm' if scale == 'minor' else ''
+    lookup = raw + suffix
+    return CAMELOT_MAP.get(lookup, '?')
+
+@flask_app.route('/api/analyze')
+def analyze_track():
+    import librosa
+    import numpy as np
+    import essentia.standard as es
+
+    path = request.args.get('path')
+    if not path or not os.path.exists(path):
+        return jsonify({'error': 'Файл не найден'}), 404
+
+    # ── Cache lookup ──
+    cached = _cache_get(path)
+    if cached:
+        result = {k: v for k, v in cached.items() if not k.startswith('_')}
+        result['cached'] = True
+        return jsonify(result)
+
+    try:
+        # ── Load & normalize via librosa ──
+        y, sr = librosa.load(path, sr=44100, mono=True)
+        peak = np.max(np.abs(y))
+        if peak > 0:
+            y = y / peak * 0.9
+
+        # Use middle 60% of track — skip intro/outro which confuse beat trackers
+        total = len(y)
+        start = int(total * 0.20)
+        end   = int(total * 0.80)
+        y_mid = y[start:end]
+        audio = y_mid.astype(np.float32)
+
+        # ── BPM: multi-method voting ──
+
+        # Method 1: Essentia RhythmExtractor2013
+        rhythm = es.RhythmExtractor2013(method='multifeature')
+        bpm_e, ticks_e, conf_e, _, bpm_candidates = rhythm(audio)
+        bpm_e = float(bpm_e)
+
+        # Method 2: Essentia PercivalBpmEstimator (more robust on electronic/pop)
+        percival = es.PercivalBpmEstimator(sampleRate=44100)
+        bpm_p = float(percival(audio))
+
+        # Method 3: librosa beat_track with percussive component for cleaner onsets
+        y_perc = librosa.effects.percussive(y_mid, margin=3.0)
+        onset_env = librosa.onset.onset_strength(y=y_perc, sr=sr, aggregate=np.median)
+        tempo_lr = librosa.feature.tempo(onset_envelope=onset_env, sr=sr)
+        bpm_l = float(np.atleast_1d(tempo_lr)[0])
+
+        # Collect all candidates including Essentia's internal candidates
+        candidates = [bpm_e, bpm_p, bpm_l]
+        if bpm_candidates is not None and len(bpm_candidates) > 0:
+            candidates += [float(b) for b in bpm_candidates[:4]]
+
+        # Expand candidates with ×2 and ×0.5 harmonics only
+        expanded = []
+        for b in candidates:
+            if b > 0:
+                expanded.append(b)
+                expanded.append(b * 2)
+                expanded.append(b / 2)
+
+        # Filter to musical range 60–200 BPM
+        expanded = [b for b in expanded if 60 <= b <= 200]
+
+        # Score: how many others are within 2%
+        def score(bpm_val):
+            return sum(1 for b in expanded if abs(b - bpm_val) / bpm_val < 0.02)
+
+        best_bpm = max(expanded, key=score) if expanded else bpm_e
+
+        # Pick the harmonic variant closest to the raw Essentia estimate (most reliable)
+        # This avoids ×1.5 confusion (e.g. 105 vs 157, 96 vs 144)
+        raw_ref = (bpm_e + bpm_p) / 2  # average of two Essentia methods
+        harmonic_alts = [best_bpm, best_bpm * 2, best_bpm / 2]
+        harmonic_alts = [b for b in harmonic_alts if 60 <= b <= 200]
+
+        # Among harmonics with score >= best - 1, pick closest to raw_ref
+        top_score = score(best_bpm)
+        candidates_final = [b for b in harmonic_alts if score(b) >= top_score - 1]
+        best_bpm = min(candidates_final, key=lambda b: abs(b - raw_ref))
+
+        bpm = round(best_bpm)
+
+        # ── Key via multi-profile voting ──
+        # Run 4 profiles and pick the one with highest strength
+        key_profiles = ['temperley', 'krumhansl', 'edma', 'bgate']
+        key_results = []
+        for profile in key_profiles:
+            ke = es.KeyExtractor(profileType=profile, sampleRate=44100)
+            kn, sc, st = ke(audio)
+            key_results.append((kn, sc, float(st)))
+
+        # Also run on harmonic-only signal (removes percussion noise)
+        y_harm = librosa.effects.harmonic(y_mid, margin=4.0)
+        audio_harm = y_harm.astype(np.float32)
+        for profile in ['temperley', 'edma']:
+            ke = es.KeyExtractor(profileType=profile, sampleRate=44100)
+            kn, sc, st = ke(audio_harm)
+            key_results.append((kn, sc, float(st) * 1.2))  # boost harmonic results
+
+        # Vote: group by (note, scale), sum their strengths
+        from collections import defaultdict
+        vote_scores = defaultdict(float)
+        for kn, sc, st in key_results:
+            vote_scores[(kn, sc)] += st
+
+        best_key = max(vote_scores, key=vote_scores.__getitem__)
+        key_note, scale = best_key
+        strength = vote_scores[best_key] / len(key_results)
+
+        scale_ru = {'major': 'мажор', 'minor': 'минор'}.get(scale, scale)
+        key_str  = f'{key_note} {scale_ru}'
+
+        # ── Energy ──
+        rms = librosa.feature.rms(y=y_mid)[0]
+        energy_pct = min(100, int(np.percentile(rms, 95) * 2000))
+
+        result = {
+            'bpm':          bpm,
+            'key':          key_str,
+            'key_note':     key_note,
+            'mode':         scale,
+            'key_strength': round(float(strength), 2),
+            'energy':       energy_pct,
+            'camelot':      _to_camelot(key_note, scale),
+        }
+        _cache_set(path, result)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @flask_app.route('/api/stems_list')
 def stems_list():
