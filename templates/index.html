@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Musician Assistant</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="logo">
+        <span class="logo-icon">♪</span>
+        <span class="logo-text">MusicAI</span>
+      </div>
+      <nav class="nav">
+        <button class="nav-btn active" data-tab="stems">
+          <span class="nav-icon">⚡</span> Stem Splitter
+        </button>
+        <button class="nav-btn" data-tab="bpm">
+          <span class="nav-icon">♩</span> BPM & Key
+        </button>
+      </nav>
+    </aside>
+
+    <!-- Main content -->
+    <main class="content">
+
+      <!-- STEMS TAB -->
+      <section class="tab active" id="tab-stems">
+        <div class="page-header">
+          <h1>Stem Splitter</h1>
+          <p class="subtitle">Разделение трека на drums · bass · vocals · other</p>
+        </div>
+
+        <div class="card drop-zone" id="dropZone">
+          <div class="drop-inner">
+            <div class="drop-icon">🎵</div>
+            <p class="drop-title">Перетащи аудиофайл сюда</p>
+            <p class="drop-sub">или</p>
+            <button class="btn btn-primary" id="btnPickFile">Выбрать файл</button>
+            <p class="drop-formats">MP3 · WAV · FLAC · AIFF · M4A</p>
+          </div>
+        </div>
+
+        <div class="card file-info hidden" id="fileInfo">
+          <div class="file-info-row">
+            <span class="file-icon">🎧</span>
+            <div class="file-details">
+              <span class="file-name" id="fileName">—</span>
+              <span class="file-path" id="filePath">—</span>
+            </div>
+            <button class="btn btn-ghost btn-sm" id="btnClearFile">✕</button>
+          </div>
+        </div>
+
+        <div class="card output-card">
+          <label class="label">Папка для результатов</label>
+          <div class="input-row">
+            <input class="input" id="outputDir" placeholder="/Users/you/Desktop/stems" readonly />
+            <button class="btn btn-secondary" id="btnPickFolder">Обзор</button>
+          </div>
+        </div>
+
+        <button class="btn btn-primary btn-large" id="btnSeparate" disabled>
+          <span id="btnSeparateText">Разделить трек</span>
+        </button>
+
+        <!-- Progress -->
+        <div class="card progress-card hidden" id="progressCard">
+          <div class="progress-header">
+            <span class="progress-stage" id="progressStage">Подготовка...</span>
+            <span class="progress-pct" id="progressPct">0%</span>
+          </div>
+          <div class="progress-bar-wrap">
+            <div class="progress-bar" id="progressBar"></div>
+          </div>
+          <p class="progress-msg" id="progressMsg"></p>
+        </div>
+
+        <!-- Stems result -->
+        <div class="stems-result hidden" id="stemsResult">
+          <h2 class="section-title">Результат</h2>
+          <div class="stems-grid" id="stemsGrid"></div>
+        </div>
+
+      </section>
+
+      <!-- BPM TAB (placeholder) -->
+      <section class="tab" id="tab-bpm">
+        <div class="page-header">
+          <h1>BPM & Key</h1>
+          <p class="subtitle">Скоро...</p>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -30,10 +30,14 @@ class ProgressTracker:
             print(f"📊 [{self.progress}%] {stage.replace('_', ' ').title()}")
 
 
-def separate_audio_with_progress(input_path, output_dir):
+def separate_audio_with_progress(input_path, output_dir, progress_callback=None):
     """
     Разделяет аудиофайл на вокал и инструменталы с отображением прогресса
     """
+    def _cb(stage, progress, message=""):
+        if progress_callback:
+            progress_callback(stage, progress, message)
+
     tracker = ProgressTracker()
 
     # Создаем директорию для результатов
@@ -41,10 +45,12 @@ def separate_audio_with_progress(input_path, output_dir):
 
     # 1. Загрузка модели
     tracker.update_progress('loading_model', "Загрузка модели Demucs...")
+    _cb('loading_model', 5, "Загрузка модели Demucs...")
     try:
         model = get_model('htdemucs')
         model.eval()
         tracker.update_progress('loading_model', "✅ Модель загружена успешно")
+        _cb('loading_model', 10, "Модель загружена")
         time.sleep(0.5)
     except Exception as e:
         print(f"❌ Ошибка загрузки модели: {e}")
@@ -52,9 +58,11 @@ def separate_audio_with_progress(input_path, output_dir):
 
     # 2. Загрузка аудио
     tracker.update_progress('loading_audio', "Загрузка аудио файла...")
+    _cb('loading_audio', 15, "Загрузка аудио...")
     try:
         y, sr = librosa.load(input_path, sr=None, mono=False)
         tracker.update_progress('loading_audio', f"✅ Аудио загружено: {len(y) / sr:.1f} сек, {sr} Hz")
+        _cb('loading_audio', 25, f"Аудио загружено")
 
         if len(y.shape) == 1:
             y = np.vstack([y, y])
@@ -68,10 +76,12 @@ def separate_audio_with_progress(input_path, output_dir):
 
     # 3. Препроцессинг
     tracker.update_progress('preprocessing', "Подготовка данных...")
+    _cb('preprocessing', 30, "Подготовка данных...")
     time.sleep(0.5)
 
     # 4. Разделение с прогресс-баром
     tracker.update_progress('separation', "Начинаем разделение аудио...")
+    _cb('separation', 35, "Разделение аудио...")
 
     try:
         # Создаем кастомный прогресс-бар для разделения
@@ -102,6 +112,7 @@ def separate_audio_with_progress(input_path, output_dir):
         separation_progress.close()
 
         tracker.update_progress('separation', "✅ Разделение завершено!")
+        _cb('separation', 80, "Разделение завершено")
 
     except Exception as e:
         print(f"❌ Ошибка при разделении: {e}")
@@ -109,6 +120,7 @@ def separate_audio_with_progress(input_path, output_dir):
 
     # 5. Сохранение результатов
     tracker.update_progress('saving', "Сохранение результатов...")
+    _cb('saving', 85, "Сохранение файлов...")
 
     stems = ['drums', 'bass', 'other', 'vocals']
     saving_progress = tqdm(
@@ -128,6 +140,7 @@ def separate_audio_with_progress(input_path, output_dir):
 
         sf.write(output_path, audio_data, sr)
         saving_progress.set_postfix({"файл": f"{stem}.wav"})
+        _cb('saving', 85 + int((stems.index(stem) + 1) / len(stems) * 15), f"Сохранено: {stem}.wav")
 
     saving_progress.close()
 
