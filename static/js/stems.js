@@ -21,7 +21,6 @@ const progressPct     = document.getElementById('progressPct');
 const progressMsg     = document.getElementById('progressMsg');
 const stemsResult     = document.getElementById('stemsResult');
 const stemsEmpty      = document.getElementById('stemsEmpty');
-const stemsGrid       = document.getElementById('stemsGrid');
 const saveModal       = document.getElementById('saveModal');
 const saveDirInput    = document.getElementById('saveDir');
 const btnPickSaveFolder = document.getElementById('btnPickSaveFolder');
@@ -179,43 +178,241 @@ btnSaveNow.addEventListener('click', async () => {
 });
 
 function loadStems(dir) {
-  fetch('/api/stems_list?dir=' + encodeURIComponent(dir))
+  fetch('/api/stems_list?dir=' + encodeURIComponent(dir) + '&mode=' + state.currentMode)
     .then(r => r.json())
     .then(data => {
-      stemsGrid.innerHTML = '';
-      data.stems.forEach(stem => {
-        const name = stem.replace('.wav', '');
-        const path = dir + '/' + stem;
-        const card = document.createElement('div');
-        card.className = 'stem-card';
-        card.innerHTML = `
-          <div style="display:flex;align-items:center;justify-content:space-between">
-            <div class="stem-icon">${stemIcons[name] || '🎵'}</div>
-            <button class="stem-play-btn" data-path="${path}" data-name="${name}">▶</button>
-          </div>
-          <div>
-            <div class="stem-name">${name}</div>
-            <div class="stem-size">${stem}</div>
-          </div>
-          <div class="stem-actions">
-            <button class="stem-btn" onclick="openStem('${path}')">Открыть в Finder</button>
-          </div>
-        `;
-        stemsGrid.appendChild(card);
-      });
-
-      stemsGrid.querySelectorAll('.stem-play-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const path = btn.dataset.path;
-          const name = btn.dataset.name;
-          if (getCurrentStemPath() === path && getIsPlaying()) pauseAudio();
-          else loadAndPlay(path, name, btn);
-        });
-      });
-
+      _buildMixer(data.stems, dir);
       stemsResult.classList.remove('hidden');
       if (stemsEmpty) stemsEmpty.classList.add('hidden');
     });
+}
+
+// ── Mixer state ──
+const _mixer = {
+  ctx: null, tracks: [],   // [{name, path, buf, gainNode, muteGain, source, muted, soloed, vol}]
+  playingAll: false, startedAt: 0, seekOff: 0, rafId: null,
+};
+
+function _getMixCtx() {
+  if (!_mixer.ctx) _mixer.ctx = new AudioContext();
+  return _mixer.ctx;
+}
+
+function _stopMixer() {
+  cancelAnimationFrame(_mixer.rafId);
+  _mixer.tracks.forEach(t => {
+    if (t.source) { try { t.source.stop(); } catch(e){} t.source = null; }
+  });
+  _mixer.playingAll = false;
+}
+
+function _startMixerFrom(offset) {
+  _stopMixer();
+  const ctx = _getMixCtx();
+  const duration = _mixer.tracks[0]?.buf?.duration || 0;
+  _mixer.tracks.forEach(t => {
+    if (!t.buf) return;
+    t.source = ctx.createBufferSource();
+    t.source.buffer = t.buf;
+    t.source.connect(t.gainNode);
+    t.source.start(0, offset);
+  });
+  _mixer.startedAt = ctx.currentTime - offset;
+  _mixer.seekOff   = offset;
+  _mixer.playingAll = true;
+  _tickMixer(duration);
+}
+
+function _tickMixer(duration) {
+  if (!_mixer.playingAll) return;
+  const elapsed = Math.min(_mixer.ctx.currentTime - _mixer.startedAt, duration);
+  const pct = elapsed / duration * 100;
+  // update all waveform progress lines
+  document.querySelectorAll('.smx-progress').forEach(el => el.style.width = pct + '%');
+  document.querySelectorAll('.smx-time').forEach(el => el.textContent = _fmtTime(elapsed));
+  if (elapsed >= duration - 0.05) { _stopMixer(); _resetMixerUI(); return; }
+  _mixer.rafId = requestAnimationFrame(() => _tickMixer(duration));
+}
+
+function _resetMixerUI() {
+  document.querySelectorAll('.smx-progress').forEach(el => el.style.width = '0%');
+  document.querySelectorAll('.smx-time').forEach(el => el.textContent = '0:00');
+  const btn = document.getElementById('smxPlayAll');
+  if (btn) btn.textContent = '▶';
+}
+
+function _updateSolo() {
+  const hasSolo = _mixer.tracks.some(t => t.soloed);
+  _mixer.tracks.forEach(t => {
+    const active = !hasSolo || t.soloed;
+    t.muteGain.gain.value = (t.muted || !active) ? 0 : t.vol;
+  });
+}
+
+function _fmtTime(s) {
+  if (!s || isNaN(s)) return '0:00';
+  return `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`;
+}
+
+function _drawStemWave(canvas, buf) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.offsetWidth || 600;
+  const H = 72;
+  canvas.width = W; canvas.height = H;
+  const data = buf.getChannelData(0);
+  const step = Math.ceil(data.length / W);
+  const amp  = H / 2;
+  ctx.clearRect(0, 0, W, H);
+  for (let i = 0; i < W; i++) {
+    let min = 1, max = -1;
+    for (let j = 0; j < step; j++) {
+      const v = data[i * step + j] || 0;
+      if (v < min) min = v; if (v > max) max = v;
+    }
+    const intensity = Math.abs(max - min);
+    ctx.fillStyle = `rgba(34,211,160,${0.3 + intensity * 0.7})`;
+    ctx.fillRect(i, (1 + min) * amp, 1, Math.max(1, (max - min) * amp));
+  }
+}
+
+async function _buildMixer(stems, dir) {
+  const mixer = document.getElementById('stemsMixer');
+  mixer.innerHTML = '';
+  _stopMixer();
+  _mixer.tracks = [];
+
+  const ctx = _getMixCtx();
+
+  // Header toolbar
+  const toolbar = document.createElement('div');
+  toolbar.className = 'smx-toolbar';
+  toolbar.innerHTML = `
+    <button class="smx-play-all" id="smxPlayAll">▶</button>
+    <span class="smx-total-time" id="smxTotalTime">0:00</span>
+    <button class="btn btn-secondary btn-sm smx-export-btn" id="smxExportBtn">↓ Экспорт</button>
+  `;
+  mixer.appendChild(toolbar);
+
+  const tracksWrap = document.createElement('div');
+  tracksWrap.className = 'smx-tracks';
+  mixer.appendChild(tracksWrap);
+
+  const stemOrder = ['vocals', 'drums', 'bass', 'other', 'instrumental'];
+  const sorted = [...stems].sort((a, b) => {
+    const ai = stemOrder.indexOf(a.replace('.wav',''));
+    const bi = stemOrder.indexOf(b.replace('.wav',''));
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
+
+  for (const stem of sorted) {
+    const name = stem.replace('.wav', '');
+    const path = dir + '/' + stem;
+
+    // Load audio
+    let buf = null;
+    try {
+      const res = await fetch('/api/stream?path=' + encodeURIComponent(path));
+      const raw = await res.arrayBuffer();
+      buf = await ctx.decodeAudioData(raw);
+    } catch(e) { console.error('stem load error', e); }
+
+    // Audio graph: gainNode (volume) → muteGain (mute/solo) → destination
+    const gainNode = ctx.createGain();
+    const muteGain = ctx.createGain();
+    gainNode.connect(muteGain);
+    muteGain.connect(ctx.destination);
+
+    const track = { name, path, buf, gainNode, muteGain, source: null, muted: false, soloed: false, vol: 1 };
+    _mixer.tracks.push(track);
+
+    // Build row
+    const row = document.createElement('div');
+    row.className = 'smx-row';
+    row.innerHTML = `
+      <div class="smx-label">
+        <div class="smx-top-row">
+          <span class="smx-icon">${stemIcons[name] || '🎵'}</span>
+          <span class="smx-name">${name}</span>
+          <div class="smx-btns">
+            <button class="smx-btn smx-m" title="Mute">M</button>
+            <button class="smx-btn smx-s" title="Solo">S</button>
+          </div>
+        </div>
+        <div class="smx-vol-wrap">
+          <input type="range" class="smx-vol" min="0" max="1" step="0.01" value="1"/>
+        </div>
+      </div>
+      <div class="smx-wave-wrap">
+        <canvas class="smx-wave-canvas"></canvas>
+        <div class="smx-progress"></div>
+        <div class="smx-seek-overlay"></div>
+        <span class="smx-time">0:00</span>
+      </div>
+    `;
+    tracksWrap.appendChild(row);
+
+    // Draw waveform after layout
+    if (buf) {
+      requestAnimationFrame(() => {
+        const canvas = row.querySelector('.smx-wave-canvas');
+        _drawStemWave(canvas, buf);
+        document.getElementById('smxTotalTime').textContent = _fmtTime(buf.duration);
+      });
+    }
+
+    // Mute
+    row.querySelector('.smx-m').addEventListener('click', e => {
+      track.muted = !track.muted;
+      e.currentTarget.classList.toggle('active', track.muted);
+      _updateSolo();
+    });
+
+    // Solo
+    row.querySelector('.smx-s').addEventListener('click', e => {
+      track.soloed = !track.soloed;
+      e.currentTarget.classList.toggle('active', track.soloed);
+      _updateSolo();
+    });
+
+    // Volume
+    row.querySelector('.smx-vol').addEventListener('input', e => {
+      track.vol = parseFloat(e.target.value);
+      if (!track.muted) gainNode.gain.value = track.vol;
+      _updateSolo();
+    });
+
+    // Seek on waveform click
+    row.querySelector('.smx-seek-overlay').addEventListener('click', e => {
+      if (!buf) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const pct  = Math.max(0, Math.min((e.clientX - rect.left) / rect.width, 1));
+      const off  = pct * buf.duration;
+      _mixer.seekOff = off;
+      if (_mixer.playingAll) _startMixerFrom(off);
+      else {
+        document.querySelectorAll('.smx-progress').forEach(el => el.style.width = pct * 100 + '%');
+        document.querySelectorAll('.smx-time').forEach(el => el.textContent = _fmtTime(off));
+      }
+    });
+  }
+
+  // Play all button
+  document.getElementById('smxPlayAll').addEventListener('click', e => {
+    if (_mixer.playingAll) {
+      _mixer.seekOff = _mixer.ctx.currentTime - _mixer.startedAt;
+      _stopMixer();
+      e.target.textContent = '▶';
+    } else {
+      if (ctx.state === 'suspended') ctx.resume();
+      _startMixerFrom(_mixer.seekOff);
+      e.target.textContent = '⏸';
+    }
+  });
+
+  // Export button — open folder in Finder
+  document.getElementById('smxExportBtn').addEventListener('click', () => {
+    fetch('/api/open_stem?path=' + encodeURIComponent(dir + '/' + sorted[0]));
+  });
 }
 
 function showError(msg) {

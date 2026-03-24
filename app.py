@@ -469,9 +469,16 @@ def analyze_track():
 @flask_app.route('/api/stems_list')
 def stems_list():
     output_dir = request.args.get('dir')
+    mode = request.args.get('mode', '4stem')
     if not output_dir or not os.path.exists(output_dir):
         return jsonify({"stems": []})
-    stems = [f for f in os.listdir(output_dir) if f.endswith('.wav')]
+
+    if mode == '2stem':
+        expected = ['vocals.wav', 'instrumental.wav']
+    else:
+        expected = ['drums.wav', 'bass.wav', 'other.wav', 'vocals.wav']
+
+    stems = [f for f in expected if os.path.exists(os.path.join(output_dir, f))]
     return jsonify({"stems": stems, "dir": output_dir})
 
 # --- Запуск ---
