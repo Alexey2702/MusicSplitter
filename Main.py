@@ -153,6 +153,80 @@ def separate_audio_with_progress(input_path, output_dir, progress_callback=None)
             print(f"   • {stem}.wav - {file_size:.1f} MB")
 
 
+def separate_two_stems(input_path, progress_callback=None):
+    """
+    Разделяет трек на 2 дорожки: vocals и instrumental.
+    Возвращает (vocals_array, instrumental_array, sample_rate) или None при ошибке.
+    """
+    def _cb(stage, progress, message=""):
+        if progress_callback:
+            progress_callback(stage, progress, message)
+
+    _cb('loading_model', 5, "Загрузка модели...")
+    try:
+        model = get_model('htdemucs')
+        model.eval()
+        _cb('loading_model', 10, "Модель загружена")
+    except Exception as e:
+        print(f"❌ Ошибка загрузки модели: {e}")
+        return None
+
+    _cb('loading_audio', 15, "Загрузка аудио...")
+    try:
+        y, sr = librosa.load(input_path, sr=None, mono=False)
+        if len(y.shape) == 1:
+            y = np.vstack([y, y])
+        wav = torch.from_numpy(y).float()
+        _cb('loading_audio', 25, "Аудио загружено")
+    except Exception as e:
+        print(f"❌ Ошибка загрузки аудио: {e}")
+        return None
+
+    _cb('separation', 30, "Разделение аудио...")
+    try:
+        import threading
+        done_flag = [False]
+
+        def fake_progress():
+            p = 30
+            while not done_flag[0] and p < 78:
+                time.sleep(0.3)
+                p += 1
+                _cb('separation', p, "Разделение аудио...")
+
+        t = threading.Thread(target=fake_progress, daemon=True)
+        t.start()
+
+        with torch.no_grad():
+            sources = apply_model(model, wav[None], device='cpu')[0]
+
+        done_flag[0] = True
+        t.join()
+        _cb('separation', 80, "Разделение завершено")
+    except Exception as e:
+        print(f"❌ Ошибка разделения: {e}")
+        return None
+
+    # stems order: drums, bass, other, vocals
+    stems_order = ['drums', 'bass', 'other', 'vocals']
+    vocals_idx = stems_order.index('vocals')
+    vocals = sources[vocals_idx].numpy()
+
+    # instrumental = сумма всех кроме вокала
+    instrumental = sum(
+        sources[i].numpy()
+        for i, s in enumerate(stems_order) if s != 'vocals'
+    )
+
+    if len(vocals.shape) > 1 and vocals.shape[0] > 1:
+        vocals = vocals.T
+    if len(instrumental.shape) > 1 and instrumental.shape[0] > 1:
+        instrumental = instrumental.T
+
+    _cb('saving', 85, "Готово к сохранению")
+    return vocals, instrumental, sr
+
+
 def estimate_separation_time(audio_length_seconds):
     """Оценивает время разделения на основе длины аудио"""
     # Примерная оценка: 1x реального времени на CPU

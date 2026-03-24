@@ -56,7 +56,25 @@
           </div>
         </div>
 
-        <div class="card output-card">
+        <!-- Режим разделения -->
+        <div class="card mode-card">
+          <label class="label">Режим разделения</label>
+          <div class="mode-toggle">
+            <button class="mode-btn active" data-mode="2stem">
+              <span class="mode-icon">✂️</span>
+              <span class="mode-title">2 дорожки</span>
+              <span class="mode-sub">Vocals · Instrumental</span>
+            </button>
+            <button class="mode-btn" data-mode="4stem">
+              <span class="mode-icon">🎛️</span>
+              <span class="mode-title">4 дорожки</span>
+              <span class="mode-sub">Drums · Bass · Other · Vocals</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Папка — только для 4stem -->
+        <div class="card output-card" id="outputCard">
           <label class="label">Папка для результатов</label>
           <div class="input-row">
             <input class="input" id="outputDir" placeholder="/Users/you/Desktop/stems" readonly />
@@ -87,6 +105,20 @@
         </div>
 
       </section>
+
+      <!-- Save modal (2stem) -->
+      <div class="modal-overlay hidden" id="saveModal">
+        <div class="modal">
+          <div class="modal-icon">✅</div>
+          <h2 class="modal-title">Разделение завершено</h2>
+          <p class="modal-sub">Выбери папку для сохранения файлов</p>
+          <div class="input-row" style="margin: 16px 0">
+            <input class="input" id="saveDir" placeholder="Папка для сохранения" readonly />
+            <button class="btn btn-secondary" id="btnPickSaveFolder">Обзор</button>
+          </div>
+          <button class="btn btn-primary" id="btnSaveNow" style="width:100%" disabled>Сохранить</button>
+        </div>
+      </div>
 
       <!-- BPM TAB (placeholder) -->
       <section class="tab" id="tab-bpm">
