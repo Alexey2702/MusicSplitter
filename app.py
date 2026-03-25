@@ -278,11 +278,39 @@ def fs_mkdir():
 
 @flask_app.route('/api/stream')
 def stream_audio():
-    from flask import send_file
+    import mimetypes
+    from flask import send_file, Response
     path = request.args.get('path')
     if not path or not os.path.exists(path):
         return jsonify({"error": "Файл не найден"}), 404
-    return send_file(path, mimetype='audio/wav', conditional=True)
+
+    mime = mimetypes.guess_type(path)[0] or 'audio/mpeg'
+    file_size = os.path.getsize(path)
+    range_header = request.headers.get('Range')
+
+    if range_header:
+        # Parse Range: bytes=start-end
+        byte_range = range_header.replace('bytes=', '').strip()
+        parts = byte_range.split('-')
+        start = int(parts[0]) if parts[0] else 0
+        end   = int(parts[1]) if parts[1] else file_size - 1
+        end   = min(end, file_size - 1)
+        length = end - start + 1
+
+        with open(path, 'rb') as f:
+            f.seek(start)
+            data = f.read(length)
+
+        resp = Response(data, 206, mimetype=mime, direct_passthrough=True)
+        resp.headers['Content-Range']  = f'bytes {start}-{end}/{file_size}'
+        resp.headers['Accept-Ranges']  = 'bytes'
+        resp.headers['Content-Length'] = str(length)
+        return resp
+
+    # Full file with Accept-Ranges header so browser can seek
+    resp = send_file(path, mimetype=mime, conditional=True)
+    resp.headers['Accept-Ranges'] = 'bytes'
+    return resp
 
 @flask_app.route('/api/fs/quickloc')
 def fs_quickloc():

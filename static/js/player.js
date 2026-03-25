@@ -12,18 +12,17 @@ const volumeSlider    = document.getElementById('volumeSlider');
 
 let audioCtx         = null;
 let analyserNode     = null;
-let audioBuffer      = null;
-let sourceNode       = null;
+let audioBuffer      = null;  // kept for waveform draw + trackView compat
+let mediaEl          = null;  // HTMLAudioElement — actual playback engine
+let mediaSource      = null;  // MediaElementSourceNode
 let gainNode         = null;
-let startedAt        = 0;
-let seekOffset       = 0;
 let isPlaying        = false;
 let rafId            = null;
 let _currentStemPath = null;
 let currentStemCard  = null;
 let isLoadingAudio   = false;
+let seekOffset       = 0;
 
-// External tick/stop/load callbacks (used by trackView)
 const _tickCbs  = new Set();
 const _stopCbs  = new Set();
 const _loadCbs  = new Set();
@@ -34,36 +33,40 @@ export function getCurrentStemPath() { return _currentStemPath; }
 export function getIsPlaying()       { return isPlaying; }
 export function getAudioBuffer()     { return audioBuffer; }
 export function getSeekOffset()      { return seekOffset; }
+export function getElapsed()         { return mediaEl ? mediaEl.currentTime : 0; }
+export function getAnalyser()        { return analyserNode; }
 
-export function getElapsed() {
-  if (!audioCtx || !audioBuffer) return 0;
-  if (!isPlaying) return seekOffset;
-  return Math.min(audioCtx.currentTime - startedAt, audioBuffer.duration);
-}
-
-export function getAnalyser() { return analyserNode; }
-
-export function onTick(cb)   { _tickCbs.add(cb); }
-export function offTick(cb)  { _tickCbs.delete(cb); }
-export function onStop(cb)   { _stopCbs.add(cb); }
-export function offStop(cb)  { _stopCbs.delete(cb); }
-export function onLoad(cb)   { _loadCbs.add(cb); }
-export function offLoad(cb)  { _loadCbs.delete(cb); }
+export function onTick(cb)  { _tickCbs.add(cb); }
+export function offTick(cb) { _tickCbs.delete(cb); }
+export function onStop(cb)  { _stopCbs.add(cb); }
+export function offStop(cb) { _stopCbs.delete(cb); }
+export function onLoad(cb)  { _loadCbs.add(cb); }
+export function offLoad(cb) { _loadCbs.delete(cb); }
 
 function _getCtx() {
   if (!audioCtx) {
-    audioCtx   = new AudioContext();
+    audioCtx     = new AudioContext();
     analyserNode = audioCtx.createAnalyser();
     analyserNode.fftSize = 256;
-    // analyser → destination (gain will connect to analyser)
     analyserNode.connect(audioCtx.destination);
   }
   return audioCtx;
 }
 
+function _killMedia() {
+  cancelAnimationFrame(rafId);
+  if (mediaEl) {
+    mediaEl.pause();
+    mediaEl.src = '';
+    mediaEl.onended = null;
+    mediaEl.ontimeupdate = null;
+  }
+  isPlaying = false;
+}
+
 export async function loadAndPlay(path, name, card) {
   if (isLoadingAudio && _currentStemPath === path) return;
-  _killSource();
+  _killMedia();
   isLoadingAudio   = true;
   _currentStemPath = path;
   currentStemCard  = card || null;
@@ -80,86 +83,71 @@ export async function loadAndPlay(path, name, card) {
   const ctx = _getCtx();
   if (ctx.state === 'suspended') await ctx.resume();
 
-  try {
-    const res = await fetch('/api/stream?path=' + encodeURIComponent(path));
-    const raw = await res.arrayBuffer();
+  // ── HTMLAudioElement for instant streaming playback ──
+  if (mediaSource) { try { mediaSource.disconnect(); } catch(e){} }
+  mediaEl = new Audio();
+  mediaEl.crossOrigin = 'anonymous';
+  mediaEl.src = '/api/stream?path=' + encodeURIComponent(path);
+  mediaEl.volume = parseFloat(volumeSlider.value);
+
+  mediaSource = ctx.createMediaElementSource(mediaEl);
+  gainNode    = ctx.createGain();
+  gainNode.gain.value = parseFloat(volumeSlider.value);
+  mediaSource.connect(gainNode);
+  gainNode.connect(analyserNode);
+
+  mediaEl.addEventListener('loadedmetadata', () => {
     if (_currentStemPath !== path) return;
-    audioBuffer = await ctx.decodeAudioData(raw);
+    playerDuration.textContent = formatTime(mediaEl.duration);
     isLoadingAudio = false;
-    playerDuration.textContent = formatTime(audioBuffer.duration);
-    _drawWaveform(audioBuffer);
-    _startFrom(0);
-    _loadCbs.forEach(cb => cb(audioBuffer, path));
-  } catch (e) {
-    isLoadingAudio = false;
-    console.error('Ошибка загрузки:', e);
-  }
+  }, { once: true });
+
+  mediaEl.addEventListener('ended', () => {
+    isPlaying = false;
+    seekOffset = 0;
+    _setPlayBtn(false);
+    progressLine.style.width  = '0%';
+    playerCurrent.textContent = '0:00';
+    cancelAnimationFrame(rafId);
+    _stopCbs.forEach(cb => cb());
+  });
+
+  await mediaEl.play().catch(e => console.error('play error', e));
+  isPlaying = true;
+  _tick();
+
+  // ── Fetch full buffer in background for waveform + trackView ──
+  fetch('/api/stream?path=' + encodeURIComponent(path))
+    .then(r => r.arrayBuffer())
+    .then(raw => ctx.decodeAudioData(raw))
+    .then(buf => {
+      if (_currentStemPath !== path) return;
+      audioBuffer = buf;
+      _drawWaveform(buf);
+      _loadCbs.forEach(cb => cb(buf, path));
+    })
+    .catch(() => {});
 }
 
 export function seekTo(offset) {
-  if (!audioBuffer) return;
-  const wasPlaying = isPlaying;
-  _killSource();
-  seekOffset = Math.max(0, Math.min(offset, audioBuffer.duration - 0.01));
-  if (wasPlaying) {
-    _startFrom(seekOffset);
-  } else {
-    // update bar UI even when paused
-    const pct = seekOffset / audioBuffer.duration * 100;
-    progressLine.style.width  = pct + '%';
-    playerCurrent.textContent = formatTime(seekOffset);
-    _tickCbs.forEach(cb => cb(seekOffset, audioBuffer.duration));
-  }
-}
-
-function _startFrom(offset) {
-  if (!audioBuffer) return;
-  _killSource();
-  const ctx  = _getCtx();
-  sourceNode = ctx.createBufferSource();
-  sourceNode.buffer = audioBuffer;
-  gainNode = ctx.createGain();
-  gainNode.gain.value = parseFloat(volumeSlider.value);
-  sourceNode.connect(gainNode);
-  gainNode.connect(analyserNode); // → analyser → destination
-  sourceNode.start(0, offset);
-  startedAt  = ctx.currentTime - offset;
-  seekOffset = offset;
-  isPlaying  = true;
-  sourceNode.onended = () => {
-    if (!isPlaying) return;
-    const elapsed = ctx.currentTime - startedAt;
-    if (elapsed >= audioBuffer.duration - 0.1) {
-      isPlaying = false;
-      seekOffset = 0;
-      _setPlayBtn(false);
-      progressLine.style.width  = '0%';
-      playerCurrent.textContent = '0:00';
-      cancelAnimationFrame(rafId);
-      _stopCbs.forEach(cb => cb());
-    }
-  };
-  cancelAnimationFrame(rafId);
-  _tick();
+  if (!mediaEl) return;
+  const dur = mediaEl.duration || 0;
+  seekOffset = Math.max(0, Math.min(offset, dur - 0.01));
+  mediaEl.currentTime = seekOffset;
+  const pct = dur > 0 ? seekOffset / dur * 100 : 0;
+  progressLine.style.width  = pct + '%';
+  playerCurrent.textContent = formatTime(seekOffset);
+  _tickCbs.forEach(cb => cb(seekOffset, dur));
 }
 
 function _tick() {
-  if (!isPlaying || !audioBuffer) return;
-  const elapsed = Math.min(audioCtx.currentTime - startedAt, audioBuffer.duration);
-  progressLine.style.width  = (elapsed / audioBuffer.duration * 100) + '%';
+  if (!isPlaying || !mediaEl) return;
+  const elapsed = mediaEl.currentTime;
+  const dur     = mediaEl.duration || 1;
+  progressLine.style.width  = (elapsed / dur * 100) + '%';
   playerCurrent.textContent = formatTime(elapsed);
-  _tickCbs.forEach(cb => cb(elapsed, audioBuffer.duration));
+  _tickCbs.forEach(cb => cb(elapsed, dur));
   rafId = requestAnimationFrame(_tick);
-}
-
-function _killSource() {
-  cancelAnimationFrame(rafId);
-  if (sourceNode) {
-    sourceNode.onended = null;
-    try { sourceNode.stop(); } catch(e) {}
-    sourceNode = null;
-  }
-  isPlaying = false;
 }
 
 function _setPlayBtn(playing) {
@@ -171,22 +159,26 @@ function _setPlayBtn(playing) {
 }
 
 export function pauseAudio() {
-  if (!isPlaying || !audioCtx) return;
-  seekOffset = audioCtx.currentTime - startedAt;
-  _killSource();
+  if (!isPlaying || !mediaEl) return;
+  seekOffset = mediaEl.currentTime;
+  mediaEl.pause();
+  isPlaying = false;
+  cancelAnimationFrame(rafId);
   _setPlayBtn(false);
 }
 
 export async function resumeAudio() {
-  if (isPlaying || !audioBuffer) return;
+  if (isPlaying || !mediaEl) return;
   const ctx = _getCtx();
   if (ctx.state === 'suspended') await ctx.resume();
-  _startFrom(seekOffset);
+  await mediaEl.play().catch(e => console.error('resume error', e));
+  isPlaying = true;
+  _tick();
   _setPlayBtn(true);
 }
 
 export function stopAudio() {
-  _killSource();
+  _killMedia();
   seekOffset = 0;
   isLoadingAudio = false;
   progressLine.style.width  = '0%';
@@ -228,11 +220,10 @@ export function formatTime(sec) {
 
 // ── Bottom bar events ──
 waveformCanvas.addEventListener('click', e => {
-  if (!audioBuffer) return;
-  const rect   = waveformCanvas.getBoundingClientRect();
-  const pct    = Math.max(0, Math.min((e.clientX - rect.left) / rect.width, 1));
-  seekTo(pct * audioBuffer.duration);
-  _setPlayBtn(true);
+  if (!mediaEl || !mediaEl.duration) return;
+  const rect = waveformCanvas.getBoundingClientRect();
+  const pct  = Math.max(0, Math.min((e.clientX - rect.left) / rect.width, 1));
+  seekTo(pct * mediaEl.duration);
 });
 
 btnPlay.addEventListener('click', () => {
@@ -265,16 +256,18 @@ let _lastAnalyzedPath = null;
 onLoad((buffer, path) => {
   if (path === _lastAnalyzedPath) return;
   _lastAnalyzedPath = path;
-  import('./trackView.js').then(m => m.pushAnalysisToBar(null)); // clear while loading
+  import('./trackView.js').then(m => m.pushAnalysisToBar(null));
   fetch('/api/analyze?path=' + encodeURIComponent(path))
     .then(r => r.json())
     .then(data => {
-      if (path !== _currentStemPath) return; // stale
+      if (path !== _currentStemPath) return;
       import('./trackView.js').then(m => m.pushAnalysisToBar(data));
     })
     .catch(() => {});
 });
 
 volumeSlider.addEventListener('input', () => {
-  if (gainNode) gainNode.gain.value = parseFloat(volumeSlider.value);
+  const v = parseFloat(volumeSlider.value);
+  if (gainNode) gainNode.gain.value = v;
+  if (mediaEl)  mediaEl.volume = v;
 });
