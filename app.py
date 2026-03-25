@@ -339,7 +339,11 @@ def _to_camelot(key_note, scale):
 def analyze_track():
     import librosa
     import numpy as np
-    import essentia.standard as es
+    try:
+        import essentia.standard as es
+        HAS_ESSENTIA = True
+    except ImportError:
+        HAS_ESSENTIA = False
 
     path = request.args.get('path')
     if not path or not os.path.exists(path):
@@ -368,72 +372,71 @@ def analyze_track():
 
         # ── BPM: multi-method voting ──
 
-        # Method 1: Essentia RhythmExtractor2013
-        rhythm = es.RhythmExtractor2013(method='multifeature')
-        bpm_e, ticks_e, conf_e, _, bpm_candidates = rhythm(audio)
-        bpm_e = float(bpm_e)
-
-        # Method 2: Essentia PercivalBpmEstimator (more robust on electronic/pop)
-        percival = es.PercivalBpmEstimator(sampleRate=44100)
-        bpm_p = float(percival(audio))
-
-        # Method 3: librosa beat_track with percussive component for cleaner onsets
+        # ── BPM: multi-method voting ──
         y_perc = librosa.effects.percussive(y_mid, margin=3.0)
         onset_env = librosa.onset.onset_strength(y=y_perc, sr=sr, aggregate=np.median)
         tempo_lr = librosa.feature.tempo(onset_envelope=onset_env, sr=sr)
         bpm_l = float(np.atleast_1d(tempo_lr)[0])
 
-        # Collect all candidates including Essentia's internal candidates
-        candidates = [bpm_e, bpm_p, bpm_l]
-        if bpm_candidates is not None and len(bpm_candidates) > 0:
-            candidates += [float(b) for b in bpm_candidates[:4]]
+        if HAS_ESSENTIA:
+            rhythm = es.RhythmExtractor2013(method='multifeature')
+            bpm_e, _, _, _, bpm_candidates = rhythm(audio)
+            bpm_e = float(bpm_e)
+            percival = es.PercivalBpmEstimator(sampleRate=44100)
+            bpm_p = float(percival(audio))
+            candidates = [bpm_e, bpm_p, bpm_l]
+            if bpm_candidates is not None and len(bpm_candidates) > 0:
+                candidates += [float(b) for b in bpm_candidates[:4]]
+            raw_ref = (bpm_e + bpm_p) / 2
+        else:
+            candidates = [bpm_l]
+            raw_ref = bpm_l
 
-        # Expand candidates with ×2 and ×0.5 harmonics only
         expanded = []
         for b in candidates:
             if b > 0:
                 expanded.append(b)
                 expanded.append(b * 2)
                 expanded.append(b / 2)
-
-        # Filter to musical range 60–200 BPM
         expanded = [b for b in expanded if 60 <= b <= 200]
 
-        # Score: how many others are within 2%
         def score(bpm_val):
             return sum(1 for b in expanded if abs(b - bpm_val) / bpm_val < 0.02)
 
-        best_bpm = max(expanded, key=score) if expanded else bpm_e
-
-        # Pick the harmonic variant closest to the raw Essentia estimate (most reliable)
-        # This avoids ×1.5 confusion (e.g. 105 vs 157, 96 vs 144)
-        raw_ref = (bpm_e + bpm_p) / 2  # average of two Essentia methods
-        harmonic_alts = [best_bpm, best_bpm * 2, best_bpm / 2]
-        harmonic_alts = [b for b in harmonic_alts if 60 <= b <= 200]
-
-        # Among harmonics with score >= best - 1, pick closest to raw_ref
+        best_bpm = max(expanded, key=score) if expanded else raw_ref
+        harmonic_alts = [b for b in [best_bpm, best_bpm * 2, best_bpm / 2] if 60 <= b <= 200]
         top_score = score(best_bpm)
         candidates_final = [b for b in harmonic_alts if score(b) >= top_score - 1]
         best_bpm = min(candidates_final, key=lambda b: abs(b - raw_ref))
-
         bpm = round(best_bpm)
 
         # ── Key via multi-profile voting ──
-        # Run 4 profiles and pick the one with highest strength
-        key_profiles = ['temperley', 'krumhansl', 'edma', 'bgate']
-        key_results = []
-        for profile in key_profiles:
-            ke = es.KeyExtractor(profileType=profile, sampleRate=44100)
-            kn, sc, st = ke(audio)
-            key_results.append((kn, sc, float(st)))
-
-        # Also run on harmonic-only signal (removes percussion noise)
-        y_harm = librosa.effects.harmonic(y_mid, margin=4.0)
-        audio_harm = y_harm.astype(np.float32)
-        for profile in ['temperley', 'edma']:
-            ke = es.KeyExtractor(profileType=profile, sampleRate=44100)
-            kn, sc, st = ke(audio_harm)
-            key_results.append((kn, sc, float(st) * 1.2))  # boost harmonic results
+        if HAS_ESSENTIA:
+            key_profiles = ['temperley', 'krumhansl', 'edma', 'bgate']
+            key_results = []
+            for profile in key_profiles:
+                ke = es.KeyExtractor(profileType=profile, sampleRate=44100)
+                kn, sc, st = ke(audio)
+                key_results.append((kn, sc, float(st)))
+            y_harm = librosa.effects.harmonic(y_mid, margin=4.0)
+            audio_harm = y_harm.astype(np.float32)
+            for profile in ['temperley', 'edma']:
+                ke = es.KeyExtractor(profileType=profile, sampleRate=44100)
+                kn, sc, st = ke(audio_harm)
+                key_results.append((kn, sc, float(st) * 1.2))
+        else:
+            # librosa fallback: chroma-based key detection
+            chroma = librosa.feature.chroma_cqt(y=y_mid, sr=sr)
+            chroma_mean = chroma.mean(axis=1)
+            notes = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']
+            major_profile = np.array([6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88])
+            minor_profile = np.array([6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17])
+            best_score, key_results = -1, []
+            for i in range(12):
+                maj = float(np.corrcoef(np.roll(major_profile, i), chroma_mean)[0,1])
+                mn  = float(np.corrcoef(np.roll(minor_profile, i), chroma_mean)[0,1])
+                key_results.append((notes[i], 'major', max(0, maj)))
+                key_results.append((notes[i], 'minor', max(0, mn)))
 
         # Vote: group by (note, scale), sum their strengths
         from collections import defaultdict

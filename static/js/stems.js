@@ -306,7 +306,7 @@ async function _buildMixer(stems, dir) {
 
   for (const stem of sorted) {
     const name = stem.replace('.wav', '');
-    const path = dir + '/' + stem;
+    const path = (dir + '/' + stem).replace(/\\/g, '/');
 
     // Load audio
     let buf = null;
